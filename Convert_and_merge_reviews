@@ -14,6 +14,22 @@ except FileNotFoundError:
     print("meta-other.json not found. Skipping removal of closed businesses.")
     closed_ids = set()
 
+keywords = ["food", "park", "amusement","lake","church"]
+
+try:
+    with open("meta-Rhode_Island.json", "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                business = json.loads(line.strip())
+                combined_text = " ".join(str(value) for value in business.values()).lower()
+                if not any(keyword.lower() in combined_text for keyword in keywords):
+                    closed_ids.add(business.get("gmap_id"))
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    print("meta-other.json not found. Skipping removal of closed businesses.")
+    closed_ids = set()
+
 input_path = "review-Rhode_Island.json"
 output_path = "cleaned_reviews.json"
 
