@@ -4,26 +4,20 @@ import re
 import time
 import torch
 import argparse
-import numpy as np
 from tqdm import tqdm
-import pandas as pd
-from datasets import Dataset
-from typing import List, Dict, Any
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForCausalLM
+from transformers import AutoTokenizer,pipeline, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 import chromadb
-from chromadb.utils import embedding_functions
 from chromadb.config import Settings
 
 
 class ReviewRAG:
-    """Retrieval-Augmented Generation system for business reviews."""
 
     def __init__(self,
                  llm_model_name="meta-llama/Llama-3.2-1B",
-                 embedding_model_name="all-MiniLM-L6-v2",
+                 embedding_model_name="MPNet-base-v2",
                  use_mps=True,
-                 db_path="./review_db",
+                 db_path="./review_db_2",
                  verbose=True):
 
         self.verbose = verbose
@@ -43,7 +37,6 @@ class ReviewRAG:
         self.print(f"Loading language model {llm_model_name}...")
         start_time = time.time()
 
-        # Use CPU first for stability, then move to MPS if available
         self.llm_tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
         if self.llm_tokenizer.pad_token is None:
             self.llm_tokenizer.pad_token = self.llm_tokenizer.eos_token
@@ -75,58 +68,48 @@ class ReviewRAG:
 
         self.print(f"Language model loaded in {time.time() - start_time:.2f}s")
 
-        # Set up vector database
         self.db_path = db_path
         self.setup_vector_db()
 
         self.print("ReviewRAG system initialized successfully")
 
     def print(self, message):
-        """Print message if verbose is enabled."""
         if self.verbose:
             print(message)
 
     def setup_vector_db(self):
-        """Set up the ChromaDB vector database."""
         self.print(f"Setting up vector database at {self.db_path}...")
 
-        # Initialize ChromaDB
         self.db = chromadb.PersistentClient(path=self.db_path, settings=Settings(allow_reset=True))
 
-        # Set up embedding function - fixed: use the model name as string instead of the model object
         device = "mps" if self.use_mps else "cpu"
         self.print(f"Using embedding device: {device}")
 
-        # Use our custom embedding function
         self.ef = CustomSentenceTransformerEF(self.embedding_model, device=device)
 
-        # Check if collection exists
         try:
-            self.collection = self.db.get_collection("business_reviews")
+            self.collection = self.db.get_collection("business_reviews_2")
             doc_count = self.collection.count()
             self.print(f"Found existing collection with {doc_count} documents")
             if doc_count == 0:
                 self.print("Warning: Collection exists but contains 0 documents")
         except Exception as e:
             self.print(f"Collection not found: {e}")
-            self.print("Creating new collection 'business_reviews'")
-            self.collection = self.db.create_collection("business_reviews")
+            self.print("Creating new collection 'business_reviews_2'")
+            self.collection = self.db.create_collection("business_reviews_2")
 
     def reset_vector_db(self):
-        """Reset the vector database."""
         self.print("Resetting vector database...")
         self.db.reset()
         self.setup_vector_db()
 
     def parse_business_reviews(self, file_path, max_reviews=None):
-        """Parse the business reviews file into a list of dictionaries."""
         self.print(f"Reading business reviews from {file_path}")
         start_time = time.time()
 
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Split by separator
         reviews_raw = content.split('---')
         self.print(f"Found {len(reviews_raw)} raw review entries")
 
@@ -135,7 +118,6 @@ class ReviewRAG:
             r'Business Name: (.*?)\nCategory: (.*?)\nReview: (.*?)(?:\nRating: (\d+))?(?:\nResponse: (.*?))?(?:\nAddress: (.*?))?(?:\nRating: ([\d\.-]+))?(?:\nGMAP ID: (.*?))?(?:\nLatitude: ([\d\.-]+))?(?:\nLongitude: ([\d\.-]+))?(?:\nDescription: (.*?))?(?:\nAverage Rating: ([\d\.-]+))?(?:\nPrice: (.*?))?(?:\nHours: (.*?))?(?:\n|$)',
             re.DOTALL)
 
-        # Process reviews up to max_reviews
         review_count = min(len(reviews_raw), max_reviews if max_reviews else len(reviews_raw))
 
         for i, review_text in enumerate(tqdm(reviews_raw[:review_count], desc="Parsing reviews")):
@@ -153,7 +135,6 @@ class ReviewRAG:
                 avg_rating = match.group(7) or ""
                 description = match.group(11) or ""
 
-                # Store as strings to avoid serialization issues with ChromaDB
                 reviews.append({
                     "business_name": business_name.strip(),
                     "category": str(category.strip()),
@@ -165,7 +146,7 @@ class ReviewRAG:
                     "description": description.strip()
                 })
             else:
-                if i % 1000 == 0:  # Limit the frequency of warnings
+                if i % 1000 == 0:  
                     self.print(f"Failed to parse review {i}")
 
         elapsed = time.time() - start_time
@@ -175,7 +156,6 @@ class ReviewRAG:
         return reviews
 
     def format_review_for_embedding(self, review):
-        """Format a review for embedding."""
         categories = review["category"].replace("'", "").replace("[", "").replace("]", "")
 
         formatted = f"""Business: {review["business_name"]}
@@ -192,7 +172,6 @@ Rating: {review["rating"]}"""
         return formatted
 
     def format_review_for_display(self, review):
-        """Format a review for human-readable display."""
         categories = review["category"].replace("'", "").replace("[", "").replace("]", "")
 
         formatted = f"""Business: {review["business_name"]}
@@ -209,7 +188,6 @@ Rating: {review["rating"]}"""
         return formatted
 
     def batch_embed_texts(self, texts, batch_size=32):
-        """Embed texts in batches to save memory."""
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
@@ -220,11 +198,9 @@ Rating: {review["rating"]}"""
         return all_embeddings
 
     def index_reviews(self, reviews, batch_size=100):
-        """Index reviews into the vector database."""
         self.print(f"Indexing {len(reviews)} reviews into the vector database...")
         start_time = time.time()
 
-        # Process in batches to avoid memory issues
         total_batches = (len(reviews) + batch_size - 1) // batch_size
 
         for batch_idx in range(total_batches):
@@ -234,26 +210,21 @@ Rating: {review["rating"]}"""
 
             self.print(f"Processing batch {batch_idx + 1}/{total_batches} ({start_idx}-{end_idx})")
 
-            # Prepare batch data
             ids = [f"review_{start_idx + i}" for i in range(len(batch))]
             documents = [self.format_review_for_embedding(review) for review in batch]
 
-            # We need to convert the complex dictionaries to simpler strings
-            # to avoid issues with ChromaDB serialization
             metadatas = []
             for review in batch:
                 metadata = {}
                 for key, value in review.items():
                     if isinstance(value, str):
-                        metadata[key] = value[:1000]  # Limit string length for metadata
+                        metadata[key] = value[:1000] 
                     else:
-                        metadata[key] = str(value)[:1000]  # Convert to string and limit length
+                        metadata[key] = str(value)[:1000]
                 metadatas.append(metadata)
 
-            # Generate embeddings in this batch
             embeddings = self.batch_embed_texts(documents)
 
-            # Add to database
             self.collection.add(
                 ids=ids,
                 documents=documents,
@@ -266,11 +237,8 @@ Rating: {review["rating"]}"""
         self.print(f"Indexed {len(reviews)} reviews in {elapsed:.2f}s ({items_per_second:.2f} reviews/second)")
 
     def query(self, query_text, n_results=5):
-        """Query the vector database for relevant reviews."""
-        # Generate embedding for the query
         query_embedding = self.embedding_model.encode(query_text, convert_to_tensor=False).tolist()
 
-        # Query using the embedding
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results
@@ -279,9 +247,8 @@ Rating: {review["rating"]}"""
         return results
 
     def generate_answer(self, query, retrieved_reviews):
-        """Generate an answer based on the query and retrieved reviews."""
         # Format prompt with retrieved reviews
-        prompt = f"""You are a business review assistant. You have access to business reviews data. 
+        prompt = f"""You are a reviews assistant. You have access to Google reviews data. 
 Answer the following question based on the information in the reviews provided below.
 If the reviews don't contain relevant information to answer the question directly, synthesize what you can learn from them.
 Provide a clear, concise response based on the review content.
@@ -291,13 +258,11 @@ Question: {query}
 Relevant Reviews:
 """
 
-        # Add retrieved reviews to the prompt
         for i, review in enumerate(retrieved_reviews["documents"][0]):
             prompt += f"\n--- Review {i + 1} ---\n{review}\n"
 
         prompt += "\nBased on these reviews, here's the answer to the question:"
 
-        # Generate answer
         self.print("Generating answer...")
         response = self.generator(
             prompt,
@@ -307,20 +272,16 @@ Relevant Reviews:
             max_new_tokens=250
         )[0]["generated_text"]
 
-        # Clean the response
         response = response.strip()
 
-        # Sometimes the model might return empty text or text with just a newline
         if not response or response.isspace():
             response = "I couldn't generate a specific answer from the reviews. Please try reformulating your question."
 
         return response
 
     def process_query(self, query, n_results=5):
-        """Process a query from start to finish."""
         self.print(f"Processing query: {query}")
 
-        # Check if the collection has documents
         if self.collection.count() == 0:
             self.print("Error: No documents in the collection. Please index reviews first.")
             return {
@@ -331,13 +292,11 @@ Relevant Reviews:
                 "generation_time": 0
             }
 
-        # 1. Retrieve relevant reviews
         start_time = time.time()
         retrieved = self.query(query, n_results=n_results)
         retrieval_time = time.time() - start_time
         self.print(f"Retrieved {len(retrieved['documents'][0])} relevant reviews in {retrieval_time:.2f}s")
 
-        # 2. Generate answer
         start_time = time.time()
         answer = self.generate_answer(query, retrieved)
         generation_time = time.time() - start_time
@@ -352,19 +311,16 @@ Relevant Reviews:
         }
 
 
-# Custom embedding function to work around ChromaDB issues
 class CustomSentenceTransformerEF:
     def __init__(self, model, device="cpu"):
         self.model = model
         self.device = device
 
     def __call__(self, texts):
-        """Generate embeddings for a list of texts."""
         return self.model.encode(texts, convert_to_tensor=False)
 
 
 def display_review_details(result, detail_level=0):
-    """Display details about the retrieved reviews."""
     if not result or not result.get("retrieved_reviews"):
         return
 
@@ -385,7 +341,7 @@ def display_review_details(result, detail_level=0):
 def main():
     parser = argparse.ArgumentParser(description="ReviewRAG: Retrieval-Augmented Generation for Business Reviews")
     parser.add_argument("--data_file", type=str, help="Path to business reviews file")
-    parser.add_argument("--db_path", type=str, default="./review_db", help="Path to vector database")
+    parser.add_argument("--db_path", type=str, default="./review_db_2", help="Path to vector database")
     parser.add_argument("--llm_model", type=str, default="meta-llama/Llama-3.2-1B", help="Language model to use")
     parser.add_argument("--embedding_model", type=str, default="all-MiniLM-L6-v2", help="Embedding model to use")
     parser.add_argument("--max_reviews", type=int, default=10000, help="Maximum number of reviews to index")
@@ -401,7 +357,6 @@ def main():
                         help="Level of review details to show (0=minimal, 1=basic, 2=full)")
     args = parser.parse_args()
 
-    # Validate arguments
     if args.reset and not args.data_file:
         print("Error: --reset requires --data_file to be specified")
         return
@@ -410,10 +365,8 @@ def main():
         print("Error: --index_only requires --data_file to be specified")
         return
 
-    # Initialize RAG system
     use_mps = args.use_mps and not args.use_cpu and torch.backends.mps.is_available()
 
-    # Create database directory if it doesn't exist
     os.makedirs(args.db_path, exist_ok=True)
 
     try:
@@ -424,21 +377,17 @@ def main():
             db_path=args.db_path
         )
 
-        # Reset database if requested
         if args.reset:
             rag.reset_vector_db()
 
-        # Parse and index reviews if data file provided
         if args.data_file:
             reviews = rag.parse_business_reviews(args.data_file, max_reviews=args.max_reviews)
             rag.index_reviews(reviews)
 
-            # Exit if index_only flag is set
             if args.index_only:
                 print("Indexing complete. Exiting.")
                 return
 
-        # Process a single query if provided
         if args.query:
             result = rag.process_query(args.query, n_results=args.n_results)
             print("\n=== ANSWER ===")
@@ -447,11 +396,9 @@ def main():
             else:
                 print("No answer generated. There might be an issue with the language model or the retrieved reviews.")
 
-            # Optionally show details about retrieved reviews
             if args.show_reviews or args.review_details > 0:
                 display_review_details(result, args.review_details)
 
-        # Start interactive mode if requested
         if args.interactive:
             print("\nEntering interactive mode. Type 'exit' to quit.")
             while True:
@@ -466,7 +413,6 @@ def main():
                 else:
                     print("No answer generated. Try reformulating your question.")
 
-                # Optionally show details about retrieved reviews
                 if args.show_reviews or args.review_details > 0:
                     display_review_details(result, args.review_details)
 
