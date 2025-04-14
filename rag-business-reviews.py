@@ -88,15 +88,15 @@ class ReviewRAG:
         self.ef = CustomSentenceTransformerEF(self.embedding_model, device=device)
 
         try:
-            self.collection = self.db.get_collection("business_reviews_2")
+            self.collection = self.db.get_collection("business_reviews")
             doc_count = self.collection.count()
             self.print(f"Found existing collection with {doc_count} documents")
             if doc_count == 0:
                 self.print("Warning: Collection exists but contains 0 documents")
         except Exception as e:
             self.print(f"Collection not found: {e}")
-            self.print("Creating new collection 'business_reviews_2'")
-            self.collection = self.db.create_collection("business_reviews_2")
+            self.print("Creating new collection 'business_reviews'")
+            self.collection = self.db.create_collection("business_reviews")
 
     def reset_vector_db(self):
         self.print("Resetting vector database...")
