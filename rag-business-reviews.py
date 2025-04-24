@@ -147,7 +147,7 @@ class ReviewRAG:
                     "description": description.strip()
                 })
             else:
-                if i % 1000 == 0:  
+                if i % 1000 == 0:
                     self.print(f"Failed to parse review {i}")
 
         elapsed = time.time() - start_time
@@ -189,7 +189,6 @@ Rating: {review["rating"]}"""
         return formatted
 
     def batch_embed_texts(self, texts, batch_size=32):
-        """Embed texts in batches to save memory."""
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
@@ -200,11 +199,9 @@ Rating: {review["rating"]}"""
         return all_embeddings
 
     def index_reviews(self, reviews, batch_size=100):
-        """Index reviews into the vector database."""
         self.print(f"Indexing {len(reviews)} reviews into the vector database...")
         start_time = time.time()
 
-        # Process in batches to avoid memory issues
         total_batches = (len(reviews) + batch_size - 1) // batch_size
 
         for batch_idx in range(total_batches):
@@ -214,26 +211,21 @@ Rating: {review["rating"]}"""
 
             self.print(f"Processing batch {batch_idx + 1}/{total_batches} ({start_idx}-{end_idx})")
 
-            # Prepare batch data
             ids = [f"review_{start_idx + i}" for i in range(len(batch))]
             documents = [self.format_review_for_embedding(review) for review in batch]
 
-            # We need to convert the complex dictionaries to simpler strings
-            # to avoid issues with ChromaDB serialization
             metadatas = []
             for review in batch:
                 metadata = {}
                 for key, value in review.items():
                     if isinstance(value, str):
-                        metadata[key] = value[:1000]  # Limit string length for metadata
+                        metadata[key] = value[:1000]  
                     else:
-                        metadata[key] = str(value)[:1000]  # Convert to string and limit length
+                        metadata[key] = str(value)[:1000]  
                 metadatas.append(metadata)
 
-            # Generate embeddings in this batch
             embeddings = self.batch_embed_texts(documents)
 
-            # Add to database
             self.collection.add(
                 ids=ids,
                 documents=documents,
