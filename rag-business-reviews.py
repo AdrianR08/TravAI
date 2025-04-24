@@ -4,27 +4,30 @@ import re
 import time
 import torch
 import argparse
+import numpy as np
 from tqdm import tqdm
-from transformers import AutoTokenizer,pipeline, AutoModelForCausalLM
+import pandas as pd
+from datasets import Dataset
+from typing import List, Dict, Any
+from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 import chromadb
+from chromadb.utils import embedding_functions
 from chromadb.config import Settings
 
 
 class ReviewRAG:
-
     def __init__(self,
                  llm_model_name="meta-llama/Llama-3.2-1B",
-                 embedding_model_name="MPNet-base-v2",
+                 embedding_model_name="all-MiniLM-L6-v2",
                  use_mps=True,
-                 db_path="./review_db_2",
+                 db_path="./review_db",
                  verbose=True):
 
         self.verbose = verbose
         self.use_mps = use_mps and torch.backends.mps.is_available()
         self.print("Initializing ReviewRAG system...")
 
-        # Set up embedding model
         self.print("Loading embedding model...")
         start_time = time.time()
         self.embedding_model_name = embedding_model_name
@@ -33,7 +36,6 @@ class ReviewRAG:
             self.embedding_model = self.embedding_model.to('mps')
         self.print(f"Embedding model loaded in {time.time() - start_time:.2f}s")
 
-        # Set up LLM for generation
         self.print(f"Loading language model {llm_model_name}...")
         start_time = time.time()
 
@@ -47,7 +49,6 @@ class ReviewRAG:
             low_cpu_mem_usage=True
         )
 
-        # Move to MPS if available
         if self.use_mps:
             try:
                 self.llm = self.llm.to("mps")
@@ -188,6 +189,7 @@ Rating: {review["rating"]}"""
         return formatted
 
     def batch_embed_texts(self, texts, batch_size=32):
+        """Embed texts in batches to save memory."""
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
@@ -198,9 +200,11 @@ Rating: {review["rating"]}"""
         return all_embeddings
 
     def index_reviews(self, reviews, batch_size=100):
+        """Index reviews into the vector database."""
         self.print(f"Indexing {len(reviews)} reviews into the vector database...")
         start_time = time.time()
 
+        # Process in batches to avoid memory issues
         total_batches = (len(reviews) + batch_size - 1) // batch_size
 
         for batch_idx in range(total_batches):
@@ -210,21 +214,26 @@ Rating: {review["rating"]}"""
 
             self.print(f"Processing batch {batch_idx + 1}/{total_batches} ({start_idx}-{end_idx})")
 
+            # Prepare batch data
             ids = [f"review_{start_idx + i}" for i in range(len(batch))]
             documents = [self.format_review_for_embedding(review) for review in batch]
 
+            # We need to convert the complex dictionaries to simpler strings
+            # to avoid issues with ChromaDB serialization
             metadatas = []
             for review in batch:
                 metadata = {}
                 for key, value in review.items():
                     if isinstance(value, str):
-                        metadata[key] = value[:1000] 
+                        metadata[key] = value[:1000]  # Limit string length for metadata
                     else:
-                        metadata[key] = str(value)[:1000]
+                        metadata[key] = str(value)[:1000]  # Convert to string and limit length
                 metadatas.append(metadata)
 
+            # Generate embeddings in this batch
             embeddings = self.batch_embed_texts(documents)
 
+            # Add to database
             self.collection.add(
                 ids=ids,
                 documents=documents,
@@ -247,7 +256,6 @@ Rating: {review["rating"]}"""
         return results
 
     def generate_answer(self, query, retrieved_reviews):
-        # Format prompt with retrieved reviews
         prompt = f"""You are a reviews assistant. You have access to Google reviews data. 
 Answer the following question based on the information in the reviews provided below.
 If the reviews don't contain relevant information to answer the question directly, synthesize what you can learn from them.
@@ -341,7 +349,7 @@ def display_review_details(result, detail_level=0):
 def main():
     parser = argparse.ArgumentParser(description="ReviewRAG: Retrieval-Augmented Generation for Business Reviews")
     parser.add_argument("--data_file", type=str, help="Path to business reviews file")
-    parser.add_argument("--db_path", type=str, default="./review_db_2", help="Path to vector database")
+    parser.add_argument("--db_path", type=str, default="./review_db", help="Path to vector database")
     parser.add_argument("--llm_model", type=str, default="meta-llama/Llama-3.2-1B", help="Language model to use")
     parser.add_argument("--embedding_model", type=str, default="all-MiniLM-L6-v2", help="Embedding model to use")
     parser.add_argument("--max_reviews", type=int, default=10000, help="Maximum number of reviews to index")
