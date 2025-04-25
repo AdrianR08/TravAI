@@ -4,7 +4,7 @@ import requests
 st.set_page_config(page_title="TravAI", layout="centered")
 st.title("🧭 TravAI")
 
-# 💅 CSS
+
 st.markdown("""
     <style>
     .qa-block {
