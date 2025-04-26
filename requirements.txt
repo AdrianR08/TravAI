@@ -1,0 +1,10 @@
+streamlit
+requests
+torch
+transformers
+sentence-transformers
+chromadb
+datasets
+tqdm
+numpy
+pandas
