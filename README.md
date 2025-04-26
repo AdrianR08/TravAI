@@ -13,6 +13,10 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
+## Merge ReviewData + MetaData
+```
+python convert_and_merge.py
+```
 
 ## **Install Dependencies:**
 ```
